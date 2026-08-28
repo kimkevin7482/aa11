@@ -1,17 +1,17 @@
 {
-  "updatedAt": "2026-08-28 23:20 KST",
+  "updatedAt": "2026-08-28 23:42 KST",
   "prices": {
     "domestic::005930": {
       "currentPrice": 257000.0,
       "week52High": 374500.0,
       "week52Low": 67500.0,
-      "asOf": "2026-08-28 23:20 KST"
+      "asOf": "2026-08-28 23:42 KST"
     },
     "overseas::MRVL": {
-      "currentPrice": 224.3,
+      "currentPrice": 225.22,
       "week52High": 329.88,
       "week52Low": 61.44,
-      "asOf": "2026-08-28 23:20 KST"
+      "asOf": "2026-08-28 23:42 KST"
     }
   }
 }
