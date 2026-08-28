@@ -30,13 +30,18 @@ def http_post(path, headers, body):
     url = API_HOST + path
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
-    for k, v in headers.items():
+    default_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+    }
+    for k, v in {**default_headers, **headers}.items():
         req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        print(f"[HTTP {e.code}] {path} -> {e.read().decode('utf-8', 'ignore')}", file=sys.stderr)
+        body_text = e.read().decode("utf-8", "ignore")
+        print(f"[HTTP {e.code}] {path} -> {body_text}", file=sys.stderr)
         return None
     except Exception as e:
         print(f"[ERROR] {path} -> {e}", file=sys.stderr)
