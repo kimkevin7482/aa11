@@ -44,6 +44,7 @@ const emptyForm = {
   market: "domestic",
   name: "",
   ticker: "",
+  exchange: "ND",
   date: new Date().toISOString().slice(0, 10),
   price: "",
   quantity: "",
@@ -142,6 +143,81 @@ function StockManagerApp() {
   const [errorMsg, setErrorMsg] = useState("");
   const [priceMap, setPriceMap] = useState({});
   const [pricesUpdatedAt, setPricesUpdatedAt] = useState(null);
+  const [showGithub, setShowGithub] = useState(false);
+  const [ghOwner, setGhOwner] = useState(() => localStorage.getItem("stockapp:gh:owner") || "");
+  const [ghRepo, setGhRepo] = useState(() => localStorage.getItem("stockapp:gh:repo") || "");
+  const [ghToken, setGhToken] = useState(() => localStorage.getItem("stockapp:gh:token") || "");
+  const [ghSyncMsg, setGhSyncMsg] = useState("");
+  const ghPath = "config/stocks.json";
+
+  const saveGithubSettings = () => {
+    localStorage.setItem("stockapp:gh:owner", ghOwner.trim());
+    localStorage.setItem("stockapp:gh:repo", ghRepo.trim());
+    localStorage.setItem("stockapp:gh:token", ghToken.trim());
+    setGhSyncMsg("설정 저장됨");
+    setTimeout(() => setGhSyncMsg(""), 2000);
+  };
+
+  const buildStocksConfig = (watchList, holdList) => {
+    const map = {};
+    [...watchList, ...holdList].forEach((it) => {
+      const ticker = (it.ticker || "").trim();
+      if (!ticker) return;
+      const key = `${it.market}::${ticker.toUpperCase()}`;
+      if (!map[key]) {
+        map[key] = { market: it.market, name: it.name, ticker: ticker.toUpperCase() };
+        if (it.market === "overseas") map[key].exchange = it.exchange || "ND";
+      }
+    });
+    return Object.values(map);
+  };
+
+  const syncToGithub = async (watchList, holdList) => {
+    const owner = ghOwner.trim();
+    const repo = ghRepo.trim();
+    const token = ghToken.trim();
+    if (!owner || !repo || !token) return; // 설정 안 됐으면 조용히 건너뜀
+
+    const config = buildStocksConfig(watchList, holdList);
+    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${ghPath}`;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+    };
+
+    try {
+      let sha = null;
+      const getRes = await fetch(apiUrl, { headers });
+      if (getRes.status === 200) {
+        const getJson = await getRes.json();
+        sha = getJson.sha;
+      } else if (getRes.status !== 404) {
+        throw new Error(`조회 실패 (${getRes.status})`);
+      }
+
+      const content = btoa(unescape(encodeURIComponent(JSON.stringify(config, null, 2))));
+      const putBody = {
+        message: "chore: sync stocks.json from app",
+        content,
+      };
+      if (sha) putBody.sha = sha;
+
+      const putRes = await fetch(apiUrl, {
+        method: "PUT",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(putBody),
+      });
+      if (!putRes.ok) {
+        const errJson = await putRes.json().catch(() => ({}));
+        throw new Error(errJson.message || `저장 실패 (${putRes.status})`);
+      }
+      setGhSyncMsg(`GitHub 동기화 완료 (${config.length}개 종목)`);
+    } catch (e) {
+      setGhSyncMsg(`GitHub 동기화 실패: ${e.message}`);
+    }
+    setTimeout(() => setGhSyncMsg(""), 4000);
+  };
+
 
   useEffect(() => {
     fetch("./prices.json", { cache: "no-store" })
@@ -241,10 +317,11 @@ function StockManagerApp() {
           const newAvg = newQty > 0 ? (holding.price * holding.quantity + price * qty) / newQty : holding.price;
           nextHoldList = prev.hold.map((h) => (h.id === holding.id ? { ...h, quantity: newQty, price: newAvg } : h));
         } else {
-          nextHoldList = [{ id: uid(), market: form.market, name: form.name, ticker: form.ticker, quantity: qty, price, currentPrice: "", createdAt: Date.now() }, ...prev.hold];
+          nextHoldList = [{ id: uid(), market: form.market, name: form.name, ticker: form.ticker, exchange: form.exchange, quantity: qty, price, currentPrice: "", createdAt: Date.now() }, ...prev.hold];
         }
         persist("buy", nextBuyList);
         persist("hold", nextHoldList);
+        syncToGithub(prev.watch, nextHoldList);
         return { ...prev, buy: nextBuyList, hold: nextHoldList };
       });
       closeForm();
@@ -271,6 +348,7 @@ function StockManagerApp() {
         }
         persist("sell", nextSellList);
         persist("hold", nextHoldList);
+        syncToGithub(prev.watch, nextHoldList);
         return { ...prev, sell: nextSellList, hold: nextHoldList };
       });
       closeForm();
@@ -287,6 +365,8 @@ function StockManagerApp() {
       }
       const next = { ...prev, [activeTab]: nextList };
       persist(activeTab, nextList);
+      if (activeTab === "watch") syncToGithub(nextList, prev.hold);
+      if (activeTab === "hold") syncToGithub(prev.watch, nextList);
       return next;
     });
     closeForm();
@@ -297,6 +377,8 @@ function StockManagerApp() {
       const nextList = prev[activeTab].filter((it) => it.id !== id);
       const next = { ...prev, [activeTab]: nextList };
       persist(activeTab, nextList);
+      if (activeTab === "watch") syncToGithub(nextList, prev.hold);
+      if (activeTab === "hold") syncToGithub(prev.watch, nextList);
       return next;
     });
   };
@@ -336,8 +418,28 @@ function StockManagerApp() {
 
       <div style={styles.backupBar}>
         {pricesUpdatedAt && <span style={styles.pricesUpdatedText}>시세 갱신: {pricesUpdatedAt}</span>}
-        <button style={styles.backupToggle} onClick={() => setShowBackup((v) => !v)}>💾 데이터 백업/복원</button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button style={styles.backupToggle} onClick={() => setShowGithub((v) => !v)}>🔗 GitHub 연동</button>
+          <button style={styles.backupToggle} onClick={() => setShowBackup((v) => !v)}>💾 데이터 백업/복원</button>
+        </div>
       </div>
+      {showGithub && (
+        <div style={styles.backupPanel}>
+          <div style={styles.backupSection}>
+            <div style={styles.backupLabel}>
+              관심종목/보유종목에 종목(티커 포함)을 추가·수정·삭제할 때마다 저장소의 config/stocks.json을 자동으로 갱신합니다.
+            </div>
+            <input style={styles.ghInput} placeholder="GitHub 아이디 (예: kimkevin7482)" value={ghOwner} onChange={(e) => setGhOwner(e.target.value)} />
+            <input style={styles.ghInput} placeholder="저장소 이름 (예: aa11)" value={ghRepo} onChange={(e) => setGhRepo(e.target.value)} />
+            <input style={styles.ghInput} type="password" placeholder="Personal Access Token (github_pat_...)" value={ghToken} onChange={(e) => setGhToken(e.target.value)} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" style={styles.backupBtn} onClick={saveGithubSettings}>설정 저장</button>
+              <button type="button" style={styles.backupBtn} onClick={() => syncToGithub(data.watch, data.hold)}>지금 동기화</button>
+            </div>
+            {ghSyncMsg && <div style={styles.backupMsg}>{ghSyncMsg}</div>}
+          </div>
+        </div>
+      )}
       {showBackup && (
         <div style={styles.backupPanel}>
           <div style={styles.backupSection}>
@@ -523,6 +625,16 @@ function StockManagerApp() {
                 <label style={styles.label}>{form.market === "overseas" ? "티커" : "종목코드"}</label>
                 <input style={styles.input} value={form.ticker} onChange={(e) => setForm((f) => ({ ...f, ticker: e.target.value }))} placeholder={form.market === "overseas" ? "예: AAPL" : "예: 005930"} />
               </div>
+              {form.market === "overseas" && (isWatchTab || isHoldTab) && (
+                <div style={styles.formRow}>
+                  <label style={styles.label}>거래소</label>
+                  <select style={styles.input} value={form.exchange} onChange={(e) => setForm((f) => ({ ...f, exchange: e.target.value }))}>
+                    <option value="ND">나스닥 (NASDAQ)</option>
+                    <option value="NY">뉴욕 (NYSE)</option>
+                    <option value="NA">아멕스 (AMEX)</option>
+                  </select>
+                </div>
+              )}
               <div style={styles.formRow}>
                 <label style={styles.label}>날짜</label>
                 <input type="date" style={styles.input} value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
@@ -616,6 +728,7 @@ const styles = {
   backupTextarea: { background: "#0B1220", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: 8, color: "#D7DBEA", fontSize: 10, fontFamily: "monospace", minHeight: 80, resize: "vertical" },
   backupBtn: { display: "flex", alignItems: "center", justifyContent: "center", background: "#1D2A4A", border: "1px solid rgba(201,162,39,0.3)", color: "#C9A227", borderRadius: 6, padding: "8px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
   backupMsg: { fontSize: 11, color: "#34D399", lineHeight: 1.4 },
+  ghInput: { background: "#0B1220", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "8px 10px", color: "#F4F1EA", fontSize: 12, fontFamily: "inherit", width: "100%" },
   tabBar: { display: "flex", padding: "10px 12px 0", gap: 4, overflowX: "auto" },
   tabBtn: { display: "flex", alignItems: "center", flex: "1 0 auto", justifyContent: "center", padding: "10px 8px", background: "transparent", border: "none", borderBottom: "2px solid transparent", cursor: "pointer", fontSize: 13, fontFamily: "inherit", fontWeight: 500, whiteSpace: "nowrap" },
   tabBtnActive: { borderBottom: "2px solid #C9A227" },
