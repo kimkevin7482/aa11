@@ -1,0 +1,4 @@
+[
+  { "market": "domestic", "name": "삼성전자", "ticker": "005930" },
+  { "market": "overseas", "name": "Marvell Technology", "ticker": "MRVL", "exchange": "ND" }
+]

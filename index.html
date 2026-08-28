@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="주식관리" />
+<title>주식 관리</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0B1220; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+/* ------------------------------------------------------------------ */
+/* 저장: 브라우저 localStorage 사용 (이 기기/브라우저에 영구 저장됨)         */
+/* ------------------------------------------------------------------ */
+const STORAGE_KEYS = {
+  watch: "stockapp:watch",
+  buy: "stockapp:buy",
+  sell: "stockapp:sell",
+  hold: "stockapp:hold",
+};
+
+const TABS = [
+  { key: "watch", label: "관심종목", emoji: "★" },
+  { key: "hold", label: "보유종목", emoji: "💼" },
+  { key: "buy", label: "매수", emoji: "⬇" },
+  { key: "sell", label: "매도", emoji: "⬆" },
+];
+
+const emptyForm = {
+  market: "domestic",
+  name: "",
+  ticker: "",
+  date: new Date().toISOString().slice(0, 10),
+  price: "",
+  quantity: "",
+  memo: "",
+  entryPrice: "",
+  targetPrice: "",
+  stopLoss: "",
+  resistance: "",
+  support: "",
+  currentPrice: "",
+  week52High: "",
+  week52Low: "",
+};
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+function formatNumber(n) {
+  if (n === "" || n === null || n === undefined || isNaN(n)) return "-";
+  return Number(n).toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+}
+function currencySymbol(market) {
+  return market === "overseas" ? "$" : "₩";
+}
+function matchKey(market, name) {
+  return `${market}::${(name || "").trim().toLowerCase()}`;
+}
+function daysSince(dateStr) {
+  if (!dateStr) return null;
+  const start = new Date(dateStr + "T00:00:00");
+  if (isNaN(start.getTime())) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((today - start) / 86400000);
+}
+function monthLabel(m) {
+  const [y, mm] = m.split("-");
+  return `${y}년 ${parseInt(mm, 10)}월`;
+}
+function profitColor(v) {
+  if (v === null || v === undefined || isNaN(v)) return "#D7DBEA";
+  if (v > 0) return "#34D399";
+  if (v < 0) return "#FB7185";
+  return "#D7DBEA";
+}
+function marketPartsBuy(list) {
+  const parts = [];
+  ["domestic", "overseas"].forEach((mkt) => {
+    const items = list.filter((it) => it.market === mkt);
+    if (items.length === 0) return;
+    const total = items.reduce((s, it) => s + Number(it.price || 0) * Number(it.quantity || 0), 0);
+    parts.push(`${mkt === "overseas" ? "해외" : "국내"} 총매수 ${currencySymbol(mkt)}${formatNumber(total)}`);
+  });
+  return parts.length ? parts.join(" · ") : "데이터 없음";
+}
+function marketPartsSell(list) {
+  const parts = [];
+  ["domestic", "overseas"].forEach((mkt) => {
+    const items = list.filter((it) => it.market === mkt);
+    if (items.length === 0) return;
+    const profit = items.reduce((s, it) => s + Number(it.profitAmount || 0), 0);
+    const cost = items.reduce((s, it) => s + Number(it.avgBuyPrice || 0) * Number(it.quantity || 0), 0);
+    const rate = cost > 0 ? (profit / cost) * 100 : null;
+    parts.push(`${mkt === "overseas" ? "해외" : "국내"} ${rate !== null ? rate.toFixed(1) + "%" : "-"} / ${currencySymbol(mkt)}${formatNumber(profit)}`);
+  });
+  return parts.length ? parts.join(" · ") : "데이터 없음";
+}
+function loadAll() {
+  const next = { watch: [], buy: [], sell: [], hold: [] };
+  Object.keys(STORAGE_KEYS).forEach((key) => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS[key]);
+      if (raw) next[key] = JSON.parse(raw);
+    } catch (e) {}
+  });
+  return next;
+}
+function saveOne(tabKey, list) {
+  try {
+    localStorage.setItem(STORAGE_KEYS[tabKey], JSON.stringify(list));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function StockManagerApp() {
+  const [activeTab, setActiveTab] = useState("watch");
+  const [data, setData] = useState(() => loadAll());
+  const [marketFilter, setMarketFilter] = useState("all");
+  const [buyMonthFilter, setBuyMonthFilter] = useState("all");
+  const [sellMonthFilter, setSellMonthFilter] = useState("all");
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [priceMap, setPriceMap] = useState({});
+  const [pricesUpdatedAt, setPricesUpdatedAt] = useState(null);
+
+  useEffect(() => {
+    fetch("./prices.json", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (json && json.prices) {
+          setPriceMap(json.prices);
+          setPricesUpdatedAt(json.updatedAt);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const getAutoPrice = (item) => {
+    if (!item.ticker) return null;
+    const key = `${item.market}::${item.ticker.trim().toUpperCase()}`;
+    return priceMap[key] || null;
+  };
+  const [showBackup, setShowBackup] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [copyMsg, setCopyMsg] = useState("");
+
+  const persist = useCallback((tabKey, list) => {
+    const ok = saveOne(tabKey, list);
+    if (!ok) {
+      setErrorMsg("저장에 실패했습니다. 브라우저 저장공간을 확인해주세요.");
+      setTimeout(() => setErrorMsg(""), 3000);
+    }
+  }, []);
+
+  const exportJson = () => JSON.stringify(data, null, 2);
+  const copyExport = async () => {
+    try {
+      await navigator.clipboard.writeText(exportJson());
+      setCopyMsg("복사되었습니다.");
+    } catch (e) {
+      setCopyMsg("자동 복사 실패 - 아래 텍스트를 직접 선택해서 복사해주세요.");
+    }
+    setTimeout(() => setCopyMsg(""), 4000);
+  };
+  const importData = () => {
+    try {
+      const parsed = JSON.parse(importText);
+      const next = {
+        watch: Array.isArray(parsed.watch) ? parsed.watch : [],
+        buy: Array.isArray(parsed.buy) ? parsed.buy : [],
+        sell: Array.isArray(parsed.sell) ? parsed.sell : [],
+        hold: Array.isArray(parsed.hold) ? parsed.hold : [],
+      };
+      setData(next);
+      Object.keys(STORAGE_KEYS).forEach((key) => persist(key, next[key]));
+      setImportText("");
+      setShowBackup(false);
+    } catch (e) {
+      setErrorMsg("가져오기에 실패했습니다. 붙여넣은 내용을 확인해주세요.");
+      setTimeout(() => setErrorMsg(""), 3000);
+    }
+  };
+
+  const openNewForm = () => {
+    setForm({ ...emptyForm, market: marketFilter === "overseas" ? "overseas" : "domestic" });
+    setEditingId(null);
+    setShowForm(true);
+  };
+  const openEditForm = (item) => {
+    setForm({ ...emptyForm, ...item });
+    setEditingId(item.id);
+    setShowForm(true);
+  };
+  const closeForm = () => {
+    setShowForm(false);
+    setEditingId(null);
+    setForm(emptyForm);
+  };
+  const startSellFromHolding = (holding) => {
+    setActiveTab("sell");
+    setForm({ ...emptyForm, market: holding.market, name: holding.name, ticker: holding.ticker || "", quantity: String(holding.quantity ?? "") });
+    setEditingId(null);
+    setShowForm(true);
+  };
+
+  const submitForm = (e) => {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+
+    if (activeTab === "buy" && !editingId) {
+      setData((prev) => {
+        const buyItem = { id: uid(), ...form, createdAt: Date.now() };
+        const nextBuyList = [buyItem, ...prev.buy];
+        const qty = Number(form.quantity || 0);
+        const price = Number(form.price || 0);
+        const key = matchKey(form.market, form.name);
+        const holding = prev.hold.find((h) => matchKey(h.market, h.name) === key);
+        let nextHoldList;
+        if (holding) {
+          const newQty = holding.quantity + qty;
+          const newAvg = newQty > 0 ? (holding.price * holding.quantity + price * qty) / newQty : holding.price;
+          nextHoldList = prev.hold.map((h) => (h.id === holding.id ? { ...h, quantity: newQty, price: newAvg } : h));
+        } else {
+          nextHoldList = [{ id: uid(), market: form.market, name: form.name, ticker: form.ticker, quantity: qty, price, currentPrice: "", createdAt: Date.now() }, ...prev.hold];
+        }
+        persist("buy", nextBuyList);
+        persist("hold", nextHoldList);
+        return { ...prev, buy: nextBuyList, hold: nextHoldList };
+      });
+      closeForm();
+      return;
+    }
+
+    if (activeTab === "sell" && !editingId) {
+      setData((prev) => {
+        const qty = Number(form.quantity || 0);
+        const price = Number(form.price || 0);
+        const key = matchKey(form.market, form.name);
+        const holding = prev.hold.find((h) => matchKey(h.market, h.name) === key);
+        const avgBuyPrice = holding ? holding.price : null;
+        const profitAmount = avgBuyPrice !== null ? (price - avgBuyPrice) * qty : null;
+        const profitRate = avgBuyPrice ? ((price - avgBuyPrice) / avgBuyPrice) * 100 : null;
+        const sellItem = { id: uid(), ...form, avgBuyPrice, profitAmount, profitRate, createdAt: Date.now() };
+        const nextSellList = [sellItem, ...prev.sell];
+        let nextHoldList = prev.hold;
+        if (holding) {
+          const newQty = holding.quantity - qty;
+          nextHoldList = newQty > 0
+            ? prev.hold.map((h) => (h.id === holding.id ? { ...h, quantity: newQty } : h))
+            : prev.hold.filter((h) => h.id !== holding.id);
+        }
+        persist("sell", nextSellList);
+        persist("hold", nextHoldList);
+        return { ...prev, sell: nextSellList, hold: nextHoldList };
+      });
+      closeForm();
+      return;
+    }
+
+    setData((prev) => {
+      const list = prev[activeTab];
+      let nextList;
+      if (editingId) {
+        nextList = list.map((it) => (it.id === editingId ? { ...it, ...form } : it));
+      } else {
+        nextList = [{ id: uid(), ...form, createdAt: Date.now() }, ...list];
+      }
+      const next = { ...prev, [activeTab]: nextList };
+      persist(activeTab, nextList);
+      return next;
+    });
+    closeForm();
+  };
+
+  const deleteItem = (id) => {
+    setData((prev) => {
+      const nextList = prev[activeTab].filter((it) => it.id !== id);
+      const next = { ...prev, [activeTab]: nextList };
+      persist(activeTab, nextList);
+      return next;
+    });
+  };
+
+  const isWatchTab = activeTab === "watch";
+  const isHoldTab = activeTab === "hold";
+  const isBuyTab = activeTab === "buy";
+  const isSellTab = activeTab === "sell";
+  const isTxTab = isBuyTab || isSellTab;
+  const showQuantityPrice = !isWatchTab;
+  const monthFilter = isBuyTab ? buyMonthFilter : isSellTab ? sellMonthFilter : "all";
+
+  const marketFiltered = data[activeTab].filter((it) => (marketFilter === "all" ? true : it.market === marketFilter));
+  const currentList = marketFiltered.filter((it) => {
+    if ((isBuyTab || isSellTab) && monthFilter !== "all") {
+      if (!it.date || it.date.slice(0, 7) !== monthFilter) return false;
+    }
+    return true;
+  });
+  const availableMonths = Array.from(new Set(marketFiltered.filter((it) => it.date).map((it) => it.date.slice(0, 7)))).sort().reverse();
+
+  return (
+    <div style={styles.app}>
+      <header style={styles.header}>
+        <div>
+          <div style={styles.eyebrow}>PORTFOLIO LEDGER</div>
+          <h1 style={styles.title}>주식 관리</h1>
+        </div>
+        <div style={styles.marketToggle}>
+          {[{ key: "all", label: "전체" }, { key: "domestic", label: "국내" }, { key: "overseas", label: "해외" }].map((m) => (
+            <button key={m.key} onClick={() => setMarketFilter(m.key)} style={{ ...styles.marketBtn, ...(marketFilter === m.key ? styles.marketBtnActive : {}) }}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <div style={styles.backupBar}>
+        {pricesUpdatedAt && <span style={styles.pricesUpdatedText}>시세 갱신: {pricesUpdatedAt}</span>}
+        <button style={styles.backupToggle} onClick={() => setShowBackup((v) => !v)}>💾 데이터 백업/복원</button>
+      </div>
+      {showBackup && (
+        <div style={styles.backupPanel}>
+          <div style={styles.backupSection}>
+            <div style={styles.backupLabel}>내보내기 — 복사해서 메모 앱 등에 보관하세요</div>
+            <textarea readOnly style={styles.backupTextarea} value={exportJson()} onFocus={(e) => e.target.select()} />
+            <button type="button" style={styles.backupBtn} onClick={copyExport}>복사하기</button>
+            {copyMsg && <div style={styles.backupMsg}>{copyMsg}</div>}
+          </div>
+          <div style={styles.backupSection}>
+            <div style={styles.backupLabel}>가져오기 — 백업 텍스트를 붙여넣으면 현재 데이터를 덮어씁니다</div>
+            <textarea style={styles.backupTextarea} value={importText} onChange={(e) => setImportText(e.target.value)} placeholder='{"watch": [...], ...}' />
+            <button type="button" style={styles.backupBtn} onClick={importData} disabled={!importText.trim()}>가져오기</button>
+          </div>
+        </div>
+      )}
+
+      <nav style={styles.tabBar}>
+        {TABS.map((t) => {
+          const active = activeTab === t.key;
+          return (
+            <button key={t.key} onClick={() => { setActiveTab(t.key); closeForm(); }} style={{ ...styles.tabBtn, ...(active ? styles.tabBtnActive : {}) }}>
+              <span style={{ marginRight: 6, color: active ? "#C9A227" : "#5B6785" }}>{t.emoji}</span>
+              <span style={{ color: active ? "#F4F1EA" : "#8792AC" }}>{t.label}</span>
+              <span style={styles.tabCount}>{data[t.key].filter((it) => (marketFilter === "all" ? true : it.market === marketFilter)).length}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      <main style={styles.main}>
+        {(isBuyTab || isSellTab) && (
+          <div style={styles.filterBar}>
+            <select style={styles.select} value={monthFilter} onChange={(e) => (isBuyTab ? setBuyMonthFilter(e.target.value) : setSellMonthFilter(e.target.value))}>
+              <option value="all">전체 기간</option>
+              {availableMonths.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+            <span style={styles.summaryText}>{isBuyTab ? marketPartsBuy(currentList) : marketPartsSell(currentList)}</span>
+          </div>
+        )}
+
+        {currentList.length === 0 && !showForm ? (
+          <div style={styles.emptyState}>
+            <div style={{ fontSize: 28, marginBottom: 8, opacity: 0.4 }}>—</div>
+            <div style={{ marginBottom: 14 }}>{emptyCopy(activeTab, marketFilter)}</div>
+            <button style={styles.addBtn} onClick={openNewForm}>+ 종목 추가</button>
+          </div>
+        ) : (
+          <>
+            <div style={styles.listHeaderRow}>
+              <span style={styles.listHeaderText}>{marketLabel(marketFilter)} · {currentList.length}건</span>
+              {!showForm && <button style={styles.addBtnSmall} onClick={openNewForm}>+ 추가</button>}
+            </div>
+            <ul style={styles.list}>
+              {currentList.map((item) => {
+                const sym = currencySymbol(item.market);
+                const days = isWatchTab ? daysSince(item.date) : null;
+                const autoPrice = (isWatchTab || isHoldTab) ? getAutoPrice(item) : null;
+                const effectiveCurrentPrice = autoPrice ? autoPrice.currentPrice : (item.currentPrice !== "" ? item.currentPrice : null);
+                const effectiveWeek52High = autoPrice ? autoPrice.week52High : (item.week52High || null);
+                const effectiveWeek52Low = autoPrice ? autoPrice.week52Low : (item.week52Low || null);
+
+                const holdProfitRate = isHoldTab && effectiveCurrentPrice != null && item.price
+                  ? ((Number(effectiveCurrentPrice) - item.price) / item.price) * 100 : null;
+                const holdProfitAmount = isHoldTab && effectiveCurrentPrice != null
+                  ? (Number(effectiveCurrentPrice) - item.price) * item.quantity : null;
+
+                return (
+                  <li key={item.id} style={styles.card}>
+                    <div style={styles.cardTop}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                        <span style={styles.stockName}>{item.name}</span>
+                        {item.ticker && <span style={styles.ticker}>{item.ticker}</span>}
+                        <span style={{ ...styles.marketTag, ...(item.market === "overseas" ? styles.marketTagOverseas : styles.marketTagDomestic) }}>
+                          {item.market === "overseas" ? "해외" : "국내"}
+                        </span>
+                        {isWatchTab && days !== null && <span style={styles.dayBadge}>D+{days}</span>}
+                      </div>
+                      <div style={styles.cardActions}>
+                        <button style={styles.iconBtn} onClick={() => openEditForm(item)}>✏️</button>
+                        <button style={styles.iconBtn} onClick={() => deleteItem(item.id)}>🗑️</button>
+                      </div>
+                    </div>
+
+                    <div style={styles.cardBody}>
+                      {item.date && <div style={styles.field}><span style={styles.fieldLabel}>날짜</span><span style={styles.fieldValue}>{item.date}</span></div>}
+                      {showQuantityPrice && (
+                        <>
+                          <div style={styles.field}>
+                            <span style={styles.fieldLabel}>{isTxTab ? (activeTab === "buy" ? "매수가" : "매도가") : "평균단가"}</span>
+                            <span style={styles.fieldValue}>{sym}{formatNumber(item.price)}</span>
+                          </div>
+                          <div style={styles.field}><span style={styles.fieldLabel}>수량</span><span style={styles.fieldValue}>{formatNumber(item.quantity)}</span></div>
+                        </>
+                      )}
+                    </div>
+
+                    {isBuyTab && (
+                      <div style={styles.statRow}>
+                        <div style={styles.statBox}><span style={styles.fieldLabel}>총매수가</span><span style={styles.priceValue}>{sym}{formatNumber(Number(item.price || 0) * Number(item.quantity || 0))}</span></div>
+                      </div>
+                    )}
+
+                    {isSellTab && (
+                      <div style={styles.statRow}>
+                        <div style={styles.statBox}><span style={styles.fieldLabel}>평균매수가</span><span style={styles.priceValue}>{item.avgBuyPrice != null ? `${sym}${formatNumber(item.avgBuyPrice)}` : "-"}</span></div>
+                        <div style={styles.statBox}><span style={styles.fieldLabel}>수익률</span><span style={{ ...styles.priceValue, color: profitColor(item.profitRate) }}>{item.profitRate != null ? `${item.profitRate.toFixed(1)}%` : "-"}</span></div>
+                        <div style={styles.statBox}><span style={styles.fieldLabel}>수익금</span><span style={{ ...styles.priceValue, color: profitColor(item.profitAmount) }}>{item.profitAmount != null ? `${sym}${formatNumber(item.profitAmount)}` : "-"}</span></div>
+                      </div>
+                    )}
+
+                    {isHoldTab && (
+                      <>
+                        <div style={styles.statRow}>
+                          <div style={styles.statBox}><span style={styles.fieldLabel}>총매수가</span><span style={styles.priceValue}>{sym}{formatNumber(Number(item.price || 0) * Number(item.quantity || 0))}</span></div>
+                          <div style={styles.statBox}>
+                            <span style={styles.fieldLabel}>현재가 {autoPrice && <span style={styles.autoTag}>자동</span>}</span>
+                            <span style={styles.priceValue}>{effectiveCurrentPrice != null ? `${sym}${formatNumber(effectiveCurrentPrice)}` : "미입력"}</span>
+                          </div>
+                        </div>
+                        {holdProfitAmount !== null && (
+                          <div style={styles.statRow}>
+                            <div style={styles.statBox}><span style={styles.fieldLabel}>수익률</span><span style={{ ...styles.priceValue, color: profitColor(holdProfitRate) }}>{holdProfitRate.toFixed(1)}%</span></div>
+                            <div style={styles.statBox}><span style={styles.fieldLabel}>수익금</span><span style={{ ...styles.priceValue, color: profitColor(holdProfitAmount) }}>{sym}{formatNumber(holdProfitAmount)}</span></div>
+                          </div>
+                        )}
+                        <div style={styles.cardFooterActions}>
+                          <button type="button" style={styles.sellFromHoldBtn} onClick={() => startSellFromHolding(item)}>⬆ 매도</button>
+                        </div>
+                      </>
+                    )}
+
+                    {isWatchTab && (
+                      <>
+                        <div style={styles.priceRow}>
+                          <div style={styles.priceBox}>
+                            <span style={styles.fieldLabel}>현재가 {autoPrice && <span style={styles.autoTag}>자동</span>}</span>
+                            <span style={styles.priceValue}>{effectiveCurrentPrice != null ? `${sym}${formatNumber(effectiveCurrentPrice)}` : "미입력"}</span>
+                          </div>
+                          <div style={styles.priceBox}><span style={styles.fieldLabel}>52주 최고</span><span style={styles.priceValue}>{effectiveWeek52High ? `${sym}${formatNumber(effectiveWeek52High)}` : "-"}</span></div>
+                          <div style={styles.priceBox}><span style={styles.fieldLabel}>52주 최저</span><span style={styles.priceValue}>{effectiveWeek52Low ? `${sym}${formatNumber(effectiveWeek52Low)}` : "-"}</span></div>
+                        </div>
+                        {autoPrice && <div style={styles.priceAsOf}>시세 기준: {autoPrice.asOf}</div>}
+                        {(item.entryPrice || item.targetPrice || item.stopLoss || item.resistance || item.support) && (
+                          <div style={styles.levelRow}>
+                            {item.entryPrice && <div style={styles.levelChip}>진입가 {sym}{formatNumber(item.entryPrice)}</div>}
+                            {item.targetPrice && <div style={styles.levelChip}>목표가 {sym}{formatNumber(item.targetPrice)}</div>}
+                            {item.stopLoss && <div style={styles.levelChip}>손절가 {sym}{formatNumber(item.stopLoss)}</div>}
+                            {item.resistance && <div style={styles.levelChip}>저항선 {sym}{formatNumber(item.resistance)}</div>}
+                            {item.support && <div style={styles.levelChip}>지지선 {sym}{formatNumber(item.support)}</div>}
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {item.memo && <div style={styles.memo}>{item.memo}</div>}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+
+        {showForm && (
+          <form style={styles.formPanel} onSubmit={submitForm}>
+            <div style={styles.formHeader}>
+              <span style={styles.formTitle}>{editingId ? "종목 수정" : "새 종목 추가"} · {TABS.find((t) => t.key === activeTab).label}</span>
+              <button type="button" style={styles.iconBtn} onClick={closeForm}>✖</button>
+            </div>
+            <div style={styles.formGrid}>
+              <div style={styles.formRowFull}>
+                <label style={styles.label}>시장</label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[{ key: "domestic", label: "국내" }, { key: "overseas", label: "해외(미국)" }].map((m) => (
+                    <button type="button" key={m.key} onClick={() => setForm((f) => ({ ...f, market: m.key }))} style={{ ...styles.pill, ...(form.market === m.key ? styles.pillActive : {}) }}>{m.label}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={styles.formRow}>
+                <label style={styles.label}>종목명 *</label>
+                <input style={styles.input} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder={form.market === "overseas" ? "예: Apple" : "예: 삼성전자"} required />
+              </div>
+              <div style={styles.formRow}>
+                <label style={styles.label}>{form.market === "overseas" ? "티커" : "종목코드"}</label>
+                <input style={styles.input} value={form.ticker} onChange={(e) => setForm((f) => ({ ...f, ticker: e.target.value }))} placeholder={form.market === "overseas" ? "예: AAPL" : "예: 005930"} />
+              </div>
+              <div style={styles.formRow}>
+                <label style={styles.label}>날짜</label>
+                <input type="date" style={styles.input} value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+              </div>
+
+              {showQuantityPrice && (
+                <>
+                  <div style={styles.formRow}>
+                    <label style={styles.label}>{activeTab === "buy" ? "매수가" : activeTab === "sell" ? "매도가" : "평균단가"} ({currencySymbol(form.market)})</label>
+                    <input type="number" inputMode="decimal" style={styles.input} value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} placeholder="0" />
+                  </div>
+                  <div style={styles.formRow}>
+                    <label style={styles.label}>수량</label>
+                    <input type="number" inputMode="numeric" style={styles.input} value={form.quantity} onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value }))} placeholder="0" />
+                  </div>
+                </>
+              )}
+
+              {isHoldTab && (
+                <div style={styles.formRow}>
+                  <label style={styles.label}>현재가 (직접 입력, {currencySymbol(form.market)})</label>
+                  <input type="number" inputMode="decimal" style={styles.input} value={form.currentPrice} onChange={(e) => setForm((f) => ({ ...f, currentPrice: e.target.value }))} placeholder="0" />
+                </div>
+              )}
+
+              {isWatchTab && (
+                <>
+                  <div style={styles.formRowFull}><div style={styles.subLabel}>매매 기준선 ({currencySymbol(form.market)})</div></div>
+                  <div style={styles.formRow}><label style={styles.label}>진입가</label><input type="number" style={styles.input} value={form.entryPrice} onChange={(e) => setForm((f) => ({ ...f, entryPrice: e.target.value }))} placeholder="0" /></div>
+                  <div style={styles.formRow}><label style={styles.label}>목표가</label><input type="number" style={styles.input} value={form.targetPrice} onChange={(e) => setForm((f) => ({ ...f, targetPrice: e.target.value }))} placeholder="0" /></div>
+                  <div style={styles.formRow}><label style={styles.label}>손절가</label><input type="number" style={styles.input} value={form.stopLoss} onChange={(e) => setForm((f) => ({ ...f, stopLoss: e.target.value }))} placeholder="0" /></div>
+                  <div style={styles.formRow}><label style={styles.label}>저항선</label><input type="number" style={styles.input} value={form.resistance} onChange={(e) => setForm((f) => ({ ...f, resistance: e.target.value }))} placeholder="0" /></div>
+                  <div style={styles.formRow}><label style={styles.label}>지지선</label><input type="number" style={styles.input} value={form.support} onChange={(e) => setForm((f) => ({ ...f, support: e.target.value }))} placeholder="0" /></div>
+                  <div style={styles.formRowFull}><div style={styles.subLabel}>시세 (직접 입력, {currencySymbol(form.market)})</div></div>
+                  <div style={styles.formRow}><label style={styles.label}>현재가</label><input type="number" style={styles.input} value={form.currentPrice} onChange={(e) => setForm((f) => ({ ...f, currentPrice: e.target.value }))} placeholder="0" /></div>
+                  <div style={styles.formRow}><label style={styles.label}>52주 최고</label><input type="number" style={styles.input} value={form.week52High} onChange={(e) => setForm((f) => ({ ...f, week52High: e.target.value }))} placeholder="0" /></div>
+                  <div style={styles.formRow}><label style={styles.label}>52주 최저</label><input type="number" style={styles.input} value={form.week52Low} onChange={(e) => setForm((f) => ({ ...f, week52Low: e.target.value }))} placeholder="0" /></div>
+                </>
+              )}
+
+              <div style={styles.formRowFull}>
+                <label style={styles.label}>메모</label>
+                <textarea style={{ ...styles.input, minHeight: 60, resize: "vertical" }} value={form.memo} onChange={(e) => setForm((f) => ({ ...f, memo: e.target.value }))} placeholder="매매 이유 등 자유롭게 기록" />
+              </div>
+            </div>
+
+            {isBuyTab && !editingId && <div style={styles.formHint}>저장하면 보유종목에 자동 반영돼요. 같은 종목이면 평균단가로 합산됩니다.</div>}
+            {isSellTab && !editingId && <div style={styles.formHint}>저장하면 보유종목에서 수량이 차감되고, 평균매수가 기준 수익률·수익금이 함께 기록됩니다.</div>}
+
+            <div style={styles.formFooter}>
+              <button type="button" style={styles.cancelBtn} onClick={closeForm}>취소</button>
+              <button type="submit" style={styles.submitBtn}>{editingId ? "수정 완료" : "저장"}</button>
+            </div>
+          </form>
+        )}
+      </main>
+      {errorMsg && <div style={styles.toast}>{errorMsg}</div>}
+    </div>
+  );
+}
+
+function emptyCopy(tab, marketFilter) {
+  const m = marketLabel(marketFilter);
+  switch (tab) {
+    case "watch": return `${m} 관심종목이 아직 없습니다.`;
+    case "buy": return `${m} 매수 기록이 아직 없습니다.`;
+    case "sell": return `${m} 매도 기록이 아직 없습니다.`;
+    default: return `${m} 보유종목이 아직 없습니다.`;
+  }
+}
+function marketLabel(marketFilter) {
+  if (marketFilter === "domestic") return "국내";
+  if (marketFilter === "overseas") return "해외";
+  return "전체";
+}
+
+const styles = {
+  app: { minHeight: "100vh", background: "#0B1220", color: "#E7E9F2", fontFamily: "'Inter', system-ui, sans-serif", maxWidth: 480, margin: "0 auto", paddingBottom: 40 },
+  header: { padding: "24px 20px 16px", display: "flex", justifyContent: "space-between", alignItems: "flex-end", borderBottom: "1px solid rgba(201,162,39,0.15)" },
+  eyebrow: { fontSize: 10, letterSpacing: "0.14em", color: "#C9A227", fontWeight: 600, marginBottom: 4 },
+  title: { fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, margin: 0, color: "#F4F1EA" },
+  marketToggle: { display: "flex", gap: 4, background: "#111A2E", borderRadius: 8, padding: 3 },
+  marketBtn: { fontSize: 12, padding: "6px 10px", borderRadius: 6, border: "none", background: "transparent", color: "#8792AC", cursor: "pointer", fontFamily: "inherit" },
+  marketBtnActive: { background: "#1D2A4A", color: "#F4F1EA" },
+  backupBar: { padding: "8px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 },
+  pricesUpdatedText: { fontSize: 10, color: "#5B6785" },
+  backupToggle: { display: "flex", alignItems: "center", background: "transparent", border: "none", color: "#5B6785", fontSize: 11, cursor: "pointer", fontFamily: "inherit", padding: "4px 2px" },
+  backupPanel: { margin: "8px 16px 0", background: "#111A2E", border: "1px solid rgba(201,162,39,0.2)", borderRadius: 10, padding: 12, display: "flex", flexDirection: "column", gap: 14 },
+  backupSection: { display: "flex", flexDirection: "column", gap: 6 },
+  backupLabel: { fontSize: 11, color: "#8792AC", lineHeight: 1.4 },
+  backupTextarea: { background: "#0B1220", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: 8, color: "#D7DBEA", fontSize: 10, fontFamily: "monospace", minHeight: 80, resize: "vertical" },
+  backupBtn: { display: "flex", alignItems: "center", justifyContent: "center", background: "#1D2A4A", border: "1px solid rgba(201,162,39,0.3)", color: "#C9A227", borderRadius: 6, padding: "8px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
+  backupMsg: { fontSize: 11, color: "#34D399", lineHeight: 1.4 },
+  tabBar: { display: "flex", padding: "10px 12px 0", gap: 4, overflowX: "auto" },
+  tabBtn: { display: "flex", alignItems: "center", flex: "1 0 auto", justifyContent: "center", padding: "10px 8px", background: "transparent", border: "none", borderBottom: "2px solid transparent", cursor: "pointer", fontSize: 13, fontFamily: "inherit", fontWeight: 500, whiteSpace: "nowrap" },
+  tabBtnActive: { borderBottom: "2px solid #C9A227" },
+  tabCount: { marginLeft: 6, fontSize: 10, color: "#5B6785", background: "#111A2E", borderRadius: 10, padding: "1px 6px" },
+  main: { padding: "16px 16px 0" },
+  filterBar: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: "wrap" },
+  select: { background: "#111A2E", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "6px 8px", color: "#F4F1EA", fontSize: 12, fontFamily: "inherit" },
+  summaryText: { fontSize: 12, color: "#D7DBEA", textAlign: "right" },
+  emptyState: { textAlign: "center", padding: "56px 20px", color: "#5B6785", fontSize: 13 },
+  addBtn: { display: "inline-flex", alignItems: "center", background: "#C9A227", color: "#0B1220", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
+  addBtnSmall: { display: "inline-flex", alignItems: "center", background: "transparent", color: "#C9A227", border: "1px solid rgba(201,162,39,0.4)", borderRadius: 6, padding: "5px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
+  listHeaderRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
+  listHeaderText: { fontSize: 11, color: "#5B6785", letterSpacing: "0.04em" },
+  list: { listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 },
+  card: { background: "#111A2E", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 10, padding: "12px 14px" },
+  cardTop: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 },
+  stockName: { fontFamily: "'Space Grotesk', sans-serif", fontSize: 15, fontWeight: 600, color: "#F4F1EA" },
+  ticker: { fontSize: 11, color: "#8792AC" },
+  marketTag: { fontSize: 10, padding: "2px 6px", borderRadius: 4, fontWeight: 600 },
+  marketTagDomestic: { background: "rgba(244,63,94,0.12)", color: "#FB7185" },
+  marketTagOverseas: { background: "rgba(59,130,246,0.14)", color: "#60A5FA" },
+  dayBadge: { fontSize: 10, padding: "2px 6px", borderRadius: 4, fontWeight: 600, background: "rgba(255,255,255,0.06)", color: "#8792AC" },
+  cardActions: { display: "flex", gap: 4, flexShrink: 0 },
+  iconBtn: { background: "transparent", border: "none", color: "#5B6785", cursor: "pointer", padding: 4, display: "flex", fontSize: 14 },
+  cardBody: { display: "flex", gap: 18, flexWrap: "wrap" },
+  field: { display: "flex", flexDirection: "column" },
+  fieldLabel: { fontSize: 10, color: "#5B6785", marginBottom: 2, display: "flex", alignItems: "center" },
+  fieldValue: { fontSize: 13, color: "#D7DBEA", fontWeight: 500 },
+  statRow: { display: "flex", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.05)" },
+  statBox: { flex: 1, background: "#0B1220", borderRadius: 8, padding: "6px 8px", display: "flex", flexDirection: "column" },
+  priceRow: { display: "flex", gap: 10, marginTop: 10, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.05)" },
+  priceBox: { flex: 1, background: "#0B1220", borderRadius: 8, padding: "6px 8px", display: "flex", flexDirection: "column" },
+  priceValue: { fontSize: 13, fontWeight: 600, color: "#F4F1EA" },
+  priceAsOf: { fontSize: 10, color: "#5B6785", marginTop: 6 },
+  autoTag: { fontSize: 9, color: "#34D399", background: "rgba(52,211,153,0.12)", borderRadius: 4, padding: "1px 4px", marginLeft: 4 },
+  levelRow: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 },
+  levelChip: { display: "flex", alignItems: "center", fontSize: 11, color: "#D7DBEA", background: "rgba(255,255,255,0.04)", borderRadius: 6, padding: "4px 8px" },
+  cardFooterActions: { display: "flex", justifyContent: "flex-end", marginTop: 10 },
+  sellFromHoldBtn: { display: "flex", alignItems: "center", background: "rgba(244,63,94,0.12)", color: "#FB7185", border: "1px solid rgba(244,63,94,0.3)", borderRadius: 6, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
+  memo: { marginTop: 8, fontSize: 12, color: "#8792AC", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 8 },
+  formPanel: { marginTop: 14, background: "#111A2E", border: "1px solid rgba(201,162,39,0.25)", borderRadius: 12, padding: 16 },
+  formHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
+  formTitle: { fontSize: 13, fontWeight: 600, color: "#F4F1EA" },
+  formGrid: { display: "flex", flexWrap: "wrap", gap: 12 },
+  formRow: { display: "flex", flexDirection: "column", gap: 4, flex: "1 1 45%" },
+  formRowFull: { display: "flex", flexDirection: "column", gap: 4, flex: "1 1 100%" },
+  subLabel: { fontSize: 11, color: "#C9A227", fontWeight: 600, marginTop: 4, letterSpacing: "0.02em" },
+  label: { fontSize: 11, color: "#8792AC" },
+  input: { background: "#0B1220", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "8px 10px", color: "#F4F1EA", fontSize: 13, fontFamily: "inherit", outline: "none", width: "100%" },
+  pill: { fontSize: 12, padding: "6px 12px", borderRadius: 20, border: "1px solid rgba(255,255,255,0.1)", background: "transparent", color: "#8792AC", cursor: "pointer", fontFamily: "inherit" },
+  pillActive: { background: "#C9A227", borderColor: "#C9A227", color: "#0B1220", fontWeight: 600 },
+  formHint: { fontSize: 11, color: "#5B6785", marginTop: 12, lineHeight: 1.5 },
+  formFooter: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 },
+  cancelBtn: { background: "transparent", border: "1px solid rgba(255,255,255,0.1)", color: "#8792AC", borderRadius: 8, padding: "9px 16px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" },
+  submitBtn: { display: "flex", alignItems: "center", background: "#C9A227", border: "none", color: "#0B1220", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
+  toast: { position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", background: "#F43F5E", color: "#fff", padding: "8px 16px", borderRadius: 8, fontSize: 12 },
+};
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<StockManagerApp />);
+</script>
+</body>
+</html>
