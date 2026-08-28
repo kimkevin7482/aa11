@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 import urllib.request
 import urllib.error
 
-API_HOST = "https://api.kiwoom.com"
+API_HOST = "https://mockapi.kiwoom.com"
 KST = timezone(timedelta(hours=9))
 
 APPKEY = os.environ.get("KIWOOM_APPKEY", "")
