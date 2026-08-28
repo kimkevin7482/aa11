@@ -1,4 +1,28 @@
 [
-  { "market": "domestic", "name": "삼성전자", "ticker": "005930" },
-  { "market": "overseas", "name": "Marvell Technology", "ticker": "MRVL", "exchange": "ND" }
+  {
+    "market": "domestic",
+    "name": "제닉스로보틱스",
+    "ticker": "381620"
+  },
+  {
+    "market": "domestic",
+    "name": "쏠리드",
+    "ticker": "050890"
+  },
+  {
+    "market": "domestic",
+    "name": "SFA넥셀",
+    "ticker": "222080"
+  },
+  {
+    "market": "domestic",
+    "name": "우리기술",
+    "ticker": "032820"
+  },
+  {
+    "market": "overseas",
+    "name": "마벨 테크놀로지",
+    "ticker": "MRVL",
+    "exchange": "ND"
+  }
 ]
