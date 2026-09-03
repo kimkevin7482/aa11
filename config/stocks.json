@@ -1,5 +1,11 @@
 [
   {
+    "market": "overseas",
+    "name": "델 테크놀로지",
+    "ticker": "DELL",
+    "exchange": "ND"
+  },
+  {
     "market": "domestic",
     "name": "SFA넥셀",
     "ticker": "222080"
