@@ -13,6 +13,11 @@
   },
   {
     "market": "domestic",
+    "name": "해치텍",
+    "ticker": "0155E0"
+  },
+  {
+    "market": "domestic",
     "name": "SFA넥셀",
     "ticker": "222080"
   },
