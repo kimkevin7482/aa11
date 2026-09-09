@@ -13,6 +13,11 @@
   },
   {
     "market": "domestic",
+    "name": "서산",
+    "ticker": "079650"
+  },
+  {
+    "market": "domestic",
     "name": "한전산업",
     "ticker": "130660"
   },
