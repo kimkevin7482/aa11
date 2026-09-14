@@ -1,41 +1,41 @@
 {
-  "updatedAt": "2026-09-12 05:53 KST",
+  "updatedAt": "2026-09-14 09:30 KST",
   "prices": {
     "overseas::WFC": {
       "currentPrice": 90.29,
       "week52High": 97.76,
       "week52Low": 72.775,
-      "asOf": "2026-09-12 05:53 KST"
+      "asOf": "2026-09-14 09:30 KST"
     },
     "overseas::DELL": {
-      "currentPrice": 566.85,
+      "currentPrice": 559.0,
       "week52High": 567.75,
       "week52Low": 110.22,
-      "asOf": "2026-09-12 05:53 KST"
+      "asOf": "2026-09-14 09:30 KST"
     },
     "domestic::222080": {
-      "currentPrice": 7500.0,
+      "currentPrice": 7330.0,
       "week52High": 19880.0,
       "week52Low": 5690.0,
-      "asOf": "2026-09-12 05:53 KST"
+      "asOf": "2026-09-14 09:30 KST"
     },
     "domestic::381620": {
-      "currentPrice": 5940.0,
+      "currentPrice": 5730.0,
       "week52High": 19940.0,
       "week52Low": 4560.0,
-      "asOf": "2026-09-12 05:53 KST"
+      "asOf": "2026-09-14 09:30 KST"
     },
     "domestic::032820": {
-      "currentPrice": 14050.0,
+      "currentPrice": 13700.0,
       "week52High": 30200.0,
       "week52Low": 3540.0,
-      "asOf": "2026-09-12 05:53 KST"
+      "asOf": "2026-09-14 09:30 KST"
     },
     "overseas::MRVL": {
-      "currentPrice": 235.7,
+      "currentPrice": 226.44,
       "week52High": 329.88,
       "week52Low": 66.14,
-      "asOf": "2026-09-12 05:53 KST"
+      "asOf": "2026-09-14 09:30 KST"
     }
   }
 }
